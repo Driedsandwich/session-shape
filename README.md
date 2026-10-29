@@ -54,7 +54,11 @@ npm run preview
 
 `http://localhost:4173/session-shape/` で本番 build を確認できます。編集用には `npm run dev`（`http://localhost:5173/session-shape/`）。通信を制限する設計に合わせて HMR を無効にしているため、変更後は再読み込みしてください。Vite 開発用クライアントの通信と本番コードは別物です。
 
-実行時依存は React / React DOM のみ。図は手組みの SVG。Vitest と jsdom により集計、サイズ境界、チャンク境界、DOM の文字・属性への本文漏出、選択欄のクリアを検証します。PNG の試験は画像・canvas API を模擬します。実ブラウザの操作はこの作業では行っていません。
+実行時依存は React / React DOM のみ。図は手組みの SVG。Vitest と jsdom により集計、サイズ境界、チャンク境界、DOM の文字・属性への本文漏出、選択欄のクリアを検証します。Vitest の PNG 試験は画像・canvas API を模擬します。
+
+初回は `npx playwright install --with-deps chromium` で試験用の Chromium を入れます。
+`npm run test:e2e` は本番 build と `vite preview` を自動起動し、CSP が有効な headless Chromium で通信・集計・本文とファイル名の非表示・実際の PNG ダウンロードを検証します。
+結果は `playwright-report/` に保存され、GitHub Actions でも push ごとに独立した workflow で実行します。
 
 ## GitHub Pages への公開
 
