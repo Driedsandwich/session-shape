@@ -28,7 +28,7 @@ export function Results({ summary: s }: { summary: Summary }) {
       <div className="details"><div><h3>使ったモデル</h3><p>{s.models.length ? s.models.join(' / ') : '記録なし'}</p></div><div><h3>トークンの合計</h3><dl className="tokens">{([
         ['入力', s.usage.input_tokens], ['出力', s.usage.output_tokens], ['キャッシュの読み', s.usage.cache_read_input_tokens], ['キャッシュの作成', s.usage.cache_creation_input_tokens],
       ] as const).map(([label, count]) => <div key={label}><dt>{label}</dt><dd>{count.toLocaleString('ja-JP')}</dd></div>)}</dl></div></div>
-      <details><summary>数え方について</summary><p>空行は除外します。図にした行は時刻がある user / assistant の行です。その他の type は数だけ集計します。会話の長さは全行の有効な時刻の最小と最大の差です。</p><p>やり直しは、エラーを返した道具と、その後の最初の道具呼び出しが同じ場合です。道具の ID で照合し、記録の行順で数えます。usage と AI の応答は行ごとに加算します。</p><p>本文の混入を防ぐため、未確認の道具名・モデル名は「その他」に置き換えます。時刻がない行の数値も集計します。</p></details>
+      <details><summary>数え方について</summary><p>空行は除外します。図にした行は時刻がある user / assistant の行です。その他の type は数だけ集計します。会話の長さは全行の有効な時刻の最小と最大の差です。</p><p>エラーを返した呼び出しは道具の ID で特定し、その後の最初の道具の呼び出しと道具の名前で比べます。同じ名前ならやり直しとして、記録の行順で数えます。</p><p>AI の応答は assistant の message.id ごとに 1 回、usage は同じ message.id の最初の行だけを加算します。ID がない行は行ごとに数えます（空文字や文字列以外の ID も含みます）。最初の行に usage がなくても後続行で補完しません。道具の呼び出しは分割された行でも塊ごとに数えます。</p><p>本文の混入を防ぐため、未確認の道具名・モデル名は「その他」に置き換えます。時刻がない行の数値も集計します。</p></details>
     </section>
     <section className="share" data-feature="export-png" aria-labelledby="share-title"><div><div className="section-heading"><span className="step">03</span><h2 id="share-title">形を共有する</h2></div><p>時間の帯を PNG に。共有するのは、あなたの手で。</p></div><button disabled={exporting} onClick={async () => {
       if (!svg.current) return;

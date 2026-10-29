@@ -13,7 +13,7 @@ export type Summary = {
 const toolNames = new Set(['Read', 'Edit', 'Write', 'Bash', 'Glob', 'Grep', 'Task', 'Agent', 'TodoWrite', 'WebFetch', 'WebSearch', 'NotebookEdit', 'AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode', 'Skill', 'ToolSearch', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'TaskOutput', 'TaskStop', 'web_search', 'web_fetch', 'code_execution']);
 const safeTool = (value: unknown) => typeof value === 'string' && toolNames.has(value) ? value : 'その他の道具';
 const safeModel = (value: unknown): string | null => typeof value !== 'string' ? null :
-  /^claude-(?:(?:opus|sonnet|haiku)-\d{1,2}(?:-\d{1,8}){0,2}|\d{1,2}(?:-\d{1,2})?-(?:opus|sonnet|haiku)(?:-\d{8})?)(?:-latest)?$/.test(value) ? value : 'その他のモデル';
+  /^claude-(?:(?:opus|sonnet|haiku|fable)-\d{1,2}(?:-\d{1,8}){0,2}|\d{1,2}(?:-\d{1,2})?-(?:opus|sonnet|haiku|fable)(?:-\d{8})?)(?:-latest)?$/.test(value) ? value : 'その他のモデル';
 const obj = (v: unknown): Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 const timestamp = (v: unknown) => {
   if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(v)) return null;
@@ -31,6 +31,8 @@ export function createAccumulator() {
   const tools = new Map<string, number>();
   const models = new Set<string>();
   // IDs and original tool names stay private to the accumulator and are discarded at finish.
+  const assistantIds = new Set<string>();
+  const usageIds = new Set<string>();
   const calls = new Map<string, { name: string | null; event?: Event }>();
   const pending = new Map<string, boolean>();
   let failedTool: string | null = null;
@@ -56,13 +58,21 @@ export function createAccumulator() {
       result.humanMessages++;
       if (at !== null) result.events.push({ at, kind: 'human', error: false });
     }
-    if (row.type === 'assistant') result.assistantMessages++;
+    const messageId = typeof message.id === 'string' && message.id.length > 0 ? message.id : null;
+    if (row.type === 'assistant' && (messageId === null || !assistantIds.has(messageId))) {
+      result.assistantMessages++;
+      if (messageId !== null) assistantIds.add(messageId);
+    }
     const model = safeModel(message.model);
     if (model) models.add(model);
-    const usage = obj(message.usage);
-    for (const key of USAGE_KEYS) {
-      const n = usage[key];
-      if (typeof n === 'number' && Number.isFinite(n) && n >= 0) result.usage[key] = Math.min(Number.MAX_SAFE_INTEGER, result.usage[key] + n);
+    if (messageId === null || !usageIds.has(messageId)) {
+      // The first row wins, even when its usage is missing or invalid.
+      if (messageId !== null) usageIds.add(messageId);
+      const usage = obj(message.usage);
+      for (const key of USAGE_KEYS) {
+        const n = usage[key];
+        if (typeof n === 'number' && Number.isFinite(n) && n >= 0) result.usage[key] = Math.min(Number.MAX_SAFE_INTEGER, result.usage[key] + n);
+      }
     }
     for (const block of blocks) {
       if (block.type === 'tool_use' || block.type === 'server_tool_use') {
@@ -97,7 +107,7 @@ export function createAccumulator() {
     result.tools = [...tools].map(([name, count]) => ({ name, count }));
     result.success = result.invalidRows === 0 && result.assistantMessages > 0;
     result.events.sort((a, b) => a.at - b.at);
-    calls.clear(); pending.clear(); failedTool = null;
+    calls.clear(); pending.clear(); assistantIds.clear(); usageIds.clear(); failedTool = null;
     return result;
   }
   return { line, finish };

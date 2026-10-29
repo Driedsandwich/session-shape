@@ -26,6 +26,9 @@ describe('表示境界のプライバシー', () => {
       expect(host.innerHTML).not.toContain(`〔目印${letter}〕`);
     }
     expect(host.innerHTML).not.toContain('秘密');
+    for (const entry of sample.trim().split('\n').map(line => JSON.parse(line))) {
+      if (entry.message?.id) expect(host.innerHTML).not.toContain(entry.message.id);
+    }
     expect(host.querySelector('svg')?.outerHTML).not.toContain('demo-');
     expect(host.querySelector('svg')).not.toBeNull();
   });
