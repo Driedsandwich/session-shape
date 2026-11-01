@@ -19,7 +19,7 @@ afterEach(() => { mounted.splice(0).forEach(fn => fn()); vi.unstubAllGlobals(); 
 describe('表示境界のプライバシー', () => {
   it.each([demo1, demo2])('集計から描いた DOM の文字・属性・SVG に本文を置かない', async sample => {
     const s = await parseFile(new NodeBlob([sample]) as unknown as Blob);
-    const host = mount(<Results summary={s} />);
+    const host = mount(<Results summary={s} kind="user_file" />);
     expect(host.textContent).toContain('読み込み成功');
     for (const letter of 'ABCDEFGHI') {
       expect(host.textContent).not.toContain(`〔目印${letter}〕`);

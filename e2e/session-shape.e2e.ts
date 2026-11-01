@@ -2,6 +2,10 @@ import { test as base, expect, type Page } from '@playwright/test';
 import { readFile, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 
+type TrackedEvent = { name: string; properties: Record<string, unknown> };
+type AuditedWindow = Window & { sessionShapeTestEvents: TrackedEvent[] };
+const trackedEvents = (page: Page) => page.evaluate(() => (window as unknown as AuditedWindow).sessionShapeTestEvents);
+
 // Observe from before navigation through the end of every scenario. Do not mock
 // network, image loading, canvas, Blob URLs, or the download implementation.
 const test = base.extend<{ browserAudit: void }>({
@@ -26,11 +30,35 @@ const test = base.extend<{ browserAudit: void }>({
     });
     context.on('weberror', error => pageErrors.push(error.error().message));
     page.on('websocket', socket => unexpectedRequests.push(`WebSocket ${socket.url()}`));
+    await page.addInitScript(() => {
+      const events: TrackedEvent[] = [];
+      (window as unknown as AuditedWindow).sessionShapeTestEvents = events;
+      window.addEventListener('session-shape:track', event => events.push((event as CustomEvent).detail));
+    });
     await use();
     await page.waitForLoadState('networkidle');
     expect(unexpectedRequests, '同一 origin の静的資産以外への要求').toEqual([]);
     expect(consoleErrors, 'console.error / CSP 違反').toEqual([]);
     expect(pageErrors, 'ブラウザ内の未処理例外').toEqual([]);
+    const events = await trackedEvents(page);
+    const kinds = ['demo_normal', 'demo_retry', 'user_file'];
+    const allowed: Record<string, Record<string, unknown[]>> = {
+      sample_start: { kind: ['demo_normal', 'demo_retry'] },
+      file_received: { method: ['picker', 'drop'] },
+      input_rejected: { reason: ['too_large', 'multiple', 'empty', 'busy'] },
+      parse_complete: { kind: kinds, outcome: ['valid', 'partial_invalid', 'no_assistant'], has_timed_rows: [true, false] },
+      shape_presented: { kind: kinds },
+      export_dispatched: { kind: kinds },
+      export_failed: { reason: ['png_failed'] },
+    };
+    for (const event of events) {
+      expect(Object.keys(event).sort()).toEqual(['name', 'properties']);
+      expect(allowed).toHaveProperty(event.name);
+      expect(Object.keys(event.properties).sort()).toEqual(Object.keys(allowed[event.name]).sort());
+      for (const [key, value] of Object.entries(event.properties)) expect(allowed[event.name][key]).toContain(value);
+    }
+    expect(JSON.stringify(events)).not.toContain('〔目印');
+    expect(JSON.stringify(events)).not.toContain(filename);
   }, { auto: true }],
 });
 
@@ -100,6 +128,19 @@ for (const [number, button] of [[1, '見本で試す'], [2, 'エラーとやり�
       await expect(page.locator('.stats > div').filter({ has: page.getByText(label, { exact: true }) }).locator('dd')).toHaveText(`${(number - 1) * 2}回`);
     }
     await expectPrivate(page, [...secrets, ...entries.flatMap(entry => entry.message?.id ? [entry.message.id] : [])]);
+    const kind = number === 1 ? 'demo_normal' : 'demo_retry';
+    const chart = page.locator('.chart');
+    await chart.scrollIntoViewIfNeeded();
+    await expect.poll(async () => (await trackedEvents(page)).filter(event => event.name === 'shape_presented')).toEqual([
+      { name: 'shape_presented', properties: { kind } },
+    ]);
+    await page.locator('header').scrollIntoViewIfNeeded();
+    await chart.scrollIntoViewIfNeeded();
+    expect((await trackedEvents(page)).filter(event => event.name === 'shape_presented')).toHaveLength(1);
+    expect((await trackedEvents(page)).filter(event => event.name !== 'shape_presented')).toEqual([
+      { name: 'sample_start', properties: { kind } },
+      { name: 'parse_complete', properties: { kind, outcome: 'valid', has_timed_rows: true } },
+    ]);
   });
 }
 
@@ -152,6 +193,9 @@ test('本物の canvas から PNG を 1 件ダウンロードし、SVG の 2 倍
   await expect(page.getByRole('status').filter({ hasText: 'PNG を書き出しました。' })).toBeVisible();
   await page.waitForLoadState('networkidle');
   expect(downloads).toEqual(['session-shape.png']);
+  expect((await trackedEvents(page)).filter(event => event.name === 'export_dispatched')).toEqual([
+    { name: 'export_dispatched', properties: { kind: 'demo_normal' } },
+  ]);
   await testInfo.attach('実ブラウザで書き出した PNG', { path, contentType: 'image/png' });
 });
 
