@@ -111,7 +111,7 @@ it('track は window の CustomEvent だけを出す', () => {
 });
 
 it.each([
-  ['見本で試す', 'demo_normal'], ['エラーとやり直しの見本', 'demo_retry'],
+  ['見本1：ふつうの会話', 'demo_normal'], ['見本2：エラーとやり直し', 'demo_retry'],
 ] as const)('見本 %s の開始・解析・可視表示・書き出しを区別する', async (label, kind) => {
   await parse(() => button(label).click());
   expect(spy.mock.calls).toEqual([
@@ -203,9 +203,9 @@ it('読む途中の例外は属性に出さず、解析完了や事前拒否に�
 });
 
 it('同じ見本の再読み込みは別の一回とし、古い監視の通知は無視する', async () => {
-  await parse(() => button('見本で試す').click());
+  await parse(() => button('見本1：ふつうの会話').click());
   intersect(0);
-  await parse(() => button('見本で試す').click());
+  await parse(() => button('見本1：ふつうの会話').click());
   intersect(0); intersect(1); intersect(1);
   expect(events('shape_presented')).toEqual([
     ['shape_presented', { kind: 'demo_normal' }], ['shape_presented', { kind: 'demo_normal' }],
@@ -217,8 +217,8 @@ it('同じ見本の再読み込みは別の一回とし、古い監視の通知�
 });
 
 it('図を見る前に次を読み込んだ場合、前の図の遅れた通知を数えない', async () => {
-  await parse(() => button('見本で試す').click());
-  await parse(() => button('エラーとやり直しの見本').click());
+  await parse(() => button('見本1：ふつうの会話').click());
+  await parse(() => button('見本2：エラーとやり直し').click());
   intersect(0); expect(events('shape_presented')).toHaveLength(0);
   intersect(1);
   expect(events('shape_presented')).toEqual([['shape_presented', { kind: 'demo_retry' }]]);
@@ -226,7 +226,7 @@ it('図を見る前に次を読み込んだ場合、前の図の遅れた通知�
 
 it('StrictMode の監視の再設定でも同じ読み込みを二重に数えない', async () => {
   act(() => root.render(<StrictMode><App /></StrictMode>));
-  await parse(() => button('見本で試す').click());
+  await parse(() => button('見本1：ふつうの会話').click());
   expect(observers).toHaveLength(2);
   intersect(0); expect(events('shape_presented')).toHaveLength(0);
   intersect(1); intersect(1);
@@ -235,7 +235,7 @@ it('StrictMode の監視の再設定でも同じ読み込みを二重に数え�
 
 it('IntersectionObserver がない環境では表示を推測して数えない', async () => {
   vi.stubGlobal('IntersectionObserver', undefined);
-  await parse(() => button('見本で試す').click());
+  await parse(() => button('見本1：ふつうの会話').click());
   expect(host.querySelector('svg')).not.toBeNull();
   expect(events('shape_presented')).toHaveLength(0);
 });

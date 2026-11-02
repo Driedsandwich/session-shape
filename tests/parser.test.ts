@@ -128,3 +128,55 @@ describe('JSONL の集計', () => {
     expect(s).toMatchObject({ untimedRows: 1, chartedRows: 0, success: true, durationMs: 0, usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 2 } });
   });
 });
+
+describe('つまずきの安全な組一覧', () => {
+  const use = (id: string, name: string, timestamp: string | null = '2026-10-20T01:00:12Z') => row('assistant', [{ type: 'tool_use', id, name, input: '〔目印入力〕' }], { timestamp });
+  const fail = (id?: string, timestamp: string | null = '2026-10-20T01:00:13Z') => row('user', [{ type: 'tool_result', tool_use_id: id, is_error: true, content: '〔目印結果〕' }], { timestamp });
+  async function checked(text: string) {
+    const s = await parse(text);
+    expect(s.troubles).toHaveLength(s.toolErrors);
+    expect(s.troubles.filter(t => t.retry)).toHaveLength(s.retries);
+    expect(JSON.stringify(s.troubles)).not.toContain('〔目印');
+    return s.troubles;
+  }
+  it('見本2の時刻・道具・件数が固定値と既存集計に合う', async () => {
+    expect(await checked(samples[1])).toEqual([
+      { number: 1, tool: 'Edit', matched: true, failedAt: 12, errorAt: 13, nextSame: { at: 20 }, nextCall: { tool: 'Edit', at: 20 }, retry: true },
+      { number: 2, tool: 'Bash', matched: true, failedAt: 50, errorAt: 53, nextSame: { at: 61 }, nextCall: { tool: 'Bash', at: 61 }, retry: true },
+    ]);
+  });
+  it('見本1の一覧は空で正常な呼び出しを失敗扱いしない', async () => {
+    expect(await checked(samples[0])).toEqual([]);
+  });
+  it('異なる独自名を同じ道具と推定せず、次の同名呼び出しを別に保持する', async () => {
+    const t = await checked([use('〔目印ID〕', '〔目印独自A〕'), fail('〔目印ID〕'), use('b', '〔目印独自B〕', '2026-10-20T01:00:20Z'), use('c', '〔目印独自A〕', '2026-10-20T01:00:30Z')].join('\n'));
+    expect(t[0]).toMatchObject({ tool: 'その他の道具', nextCall: { tool: 'その他の道具', at: 8 }, nextSame: { at: 18 }, retry: false });
+  });
+  it('同じ独自名なら伏せたままやり直しを判定する', async () => {
+    const t = await checked([use('a', '〔目印独自A〕'), fail('a'), use('b', '〔目印独自A〕')].join('\n'));
+    expect(t[0]).toMatchObject({ tool: 'その他の道具', retry: true });
+  });
+  it('時刻順が逆でも行順で直後を決める', async () => {
+    const t = await checked([use('a', 'Edit'), fail('a'), row('system', []), use('b', 'Read', '2026-10-20T01:00:30Z'), use('c', 'Edit', '2026-10-20T01:00:05Z')].join('\n'));
+    expect(t[0]).toMatchObject({ failedAt: 12, nextCall: { tool: 'Read', at: 30 }, nextSame: { at: 5 }, retry: false });
+  });
+  it('時刻欠落・照合不能・次の呼び出しなしも件数に残す', async () => {
+    const t = await checked([use('a', 'Edit', null), fail('a', null), use('b', 'Edit', null), fail('missing'), fail()].join('\n'));
+    expect(t).toEqual([
+      { number: 1, tool: 'Edit', matched: true, failedAt: null, errorAt: null, nextSame: { at: null }, nextCall: { tool: 'Edit', at: null }, retry: true },
+      { number: 2, tool: 'その他の道具', matched: false, failedAt: null, errorAt: 0, nextSame: null, nextCall: null, retry: false },
+      { number: 3, tool: 'その他の道具', matched: false, failedAt: null, errorAt: 0, nextSame: null, nextCall: null, retry: false },
+    ]);
+  });
+  it('並列の結果や重複結果も既存と同じ最後のエラーだけをやり直し候補にする', async () => {
+    const t = await checked([use('a', 'Edit'), use('b', 'Bash'), fail('a'), fail('b'), fail('b'), use('c', 'Bash')].join('\n'));
+    expect(t.map(x => x.retry)).toEqual([false, false, true]);
+    expect(t.map(x => x.nextCall?.tool)).toEqual(['Bash', 'Bash', 'Bash']);
+  });
+  it('結果が先に現れた場合は後で照合するが、やり直し判定を遡って変更しない', async () => {
+    const t = await checked([fail('a'), fail('a'), use('a', 'Edit'), use('b', 'Edit')].join('\n'));
+    expect(t).toHaveLength(2);
+    expect(t.every(x => x.matched && !x.retry)).toBe(true);
+    expect(t[0].nextSame).toEqual({ at: 0 });
+  });
+});

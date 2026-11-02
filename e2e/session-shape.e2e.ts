@@ -65,7 +65,7 @@ const test = base.extend<{ browserAudit: void }>({
 test.beforeEach(async ({ page }) => {
   const response = await page.goto('./');
   expect(response?.status()).toBe(200);
-  await expect(page.getByRole('button', { name: '見本で試す', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '見本1：ふつうの会話', exact: true })).toBeVisible();
   // Assert the actual production policy is present, rather than bypassing CSP.
   const csp = await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute('content');
   expect(csp).toContain("default-src 'none'");
@@ -77,9 +77,9 @@ test.beforeEach(async ({ page }) => {
 async function expectCounts(page: Page, counts: {
   rows: number; chartedRows: number; invalidRows: number; assistantMessages: number; toolCalls: number;
 }) {
-  await expect(page.locator('.read-counts')).toHaveText(
-    `読んだ行 ${counts.rows} ・ 図にした行 ${counts.chartedRows} ・ 読めない行 ${counts.invalidRows}`,
-  );
+  for (const [label, value] of [['読んだ行', counts.rows], ['図にした行', counts.chartedRows], ['読めない行', counts.invalidRows]] as const) {
+    await expect(page.locator('.read-counts > div').filter({ has: page.getByText(label, { exact: true }) }).locator('dd')).toHaveText(String(value));
+  }
   for (const [label, value] of [['AI の応答', counts.assistantMessages], ['道具の呼び出し', counts.toolCalls]] as const) {
     await expect(page.locator('.stats > div').filter({ has: page.getByText(label, { exact: true }) }).locator('dd')).toHaveText(`${value}回`);
   }
@@ -113,7 +113,7 @@ test('初期表示は外部通信も console error もない', async ({ page }) 
   await expect(page.getByText('読み込むと、ここに作業の形が現れます。')).toBeVisible();
 });
 
-for (const [number, button] of [[1, '見本で試す'], [2, 'エラーとやり直しの見本']] as const) {
+for (const [number, button] of [[1, '見本1：ふつうの会話'], [2, '見本2：エラーとやり直し']] as const) {
   test(`見本 ${number} の集計と本文の非表示`, async ({ page }) => {
     const sample = readFileSync(new URL(`../src/samples/demo-${number}.jsonl`, import.meta.url), 'utf8');
     const entries = sample.trim().split('\n').map(line => JSON.parse(line));
@@ -173,7 +173,7 @@ test('ファイル選択で分割応答を重複集計せず、本文もファ�
 });
 
 test('本物の canvas から PNG を 1 件ダウンロードし、SVG の 2 倍の幅になる', async ({ page }, testInfo) => {
-  await page.getByRole('button', { name: '見本で試す', exact: true }).click();
+  await page.getByRole('button', { name: '見本1：ふつうの会話', exact: true }).click();
   const svg = page.getByRole('img', { name: '人の発言と道具の呼び出しの時間の帯' });
   await expect(svg).toBeVisible();
   const dimensions = await svg.evaluate((element: SVGSVGElement) => ({ width: element.width.baseVal.value, height: element.height.baseVal.value }));
@@ -208,3 +208,76 @@ test('壊れた行の混ざったファイルは確認を促す', async ({ page 
   await expect(page.getByRole('status').filter({ hasText: /^読み込み成功$/ })).toHaveCount(0);
   await expectPrivate(page, [filename, ...markedValues(uploadRows), '〔目印壊れた行〕']);
 });
+
+for (const width of [1440, 390]) {
+  for (const scenario of ['demo1', 'demo2', 'broken', 'long-model'] as const) {
+    test(`S2 ${width}px ${scenario} の折りたたみ・横溢れ・非表示`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+      const mobile = width === 390;
+      const sample = readFileSync(new URL('../src/samples/demo-2.jsonl', import.meta.url), 'utf8');
+      if (scenario === 'demo1' || scenario === 'demo2') {
+        await page.getByRole('button', { name: scenario === 'demo1' ? '見本1：ふつうの会話' : '見本2：エラーとやり直し', exact: true }).click();
+      } else {
+        const text = scenario === 'broken' ? `${sample}\n〔目印壊れた行〕` : sample.replaceAll('claude-opus-5-5', 'claude-sonnet-99-12345678-12345678-latest').replaceAll('claude-haiku-5-5', 'claude-fable-99-12345678-12345678-latest');
+        await page.getByLabel('会話の JSONL ファイル').setInputFiles({ name: filename, mimeType: 'application/x-ndjson', buffer: Buffer.from(text) });
+      }
+      await expect(page.locator('.chart svg')).toBeVisible();
+      const noOverflow = async () => {
+        expect(await page.evaluate(() => ({ document: document.documentElement.scrollWidth, body: document.body.scrollWidth, viewport: innerWidth }))).toEqual({ document: width, body: width, viewport: width });
+        // No small text on mobile; the SVG may scroll but must not be scaled below 14px.
+        if (mobile) {
+          const small = await page.evaluate(() => [...document.querySelectorAll('body *')].filter(el => {
+            if (!(el instanceof HTMLElement || el instanceof SVGTextElement) || !el.getClientRects().length) return false;
+            if (![...el.childNodes].some(n => n.nodeType === Node.TEXT_NODE && n.textContent?.trim())) return false;
+            return parseFloat(getComputedStyle(el).fontSize) < 14;
+          }).map(el => el.tagName));
+          expect(small).toEqual([]);
+        }
+      };
+      await noOverflow();
+      if (scenario === 'demo1') {
+        await expect(page.getByText('つまずきは 0 件', { exact: true })).toBeVisible();
+        await expect(page.locator('.trouble-row')).toHaveCount(0);
+        await expect(page.locator('[data-selection-band]')).toHaveCount(0);
+      } else {
+        await expect(page.locator('.trouble-row')).toHaveCount(2);
+        await expect(page.locator('.row-action button').first()).toHaveAttribute('aria-pressed', 'true');
+      }
+      if (scenario === 'demo2' || (scenario === 'demo1' && !mobile)) {
+        const path = testInfo.outputPath(`s2-${width}-${scenario}.png`);
+        await page.screenshot({ path, fullPage: false });
+        await testInfo.attach(`S2 ${width} ${scenario}`, { path, contentType: 'image/png' });
+      }
+      if (scenario === 'demo2') {
+        const rows = page.locator('.row-action button');
+        const firstX = await page.locator('[data-selection-band]').getAttribute('x');
+        await rows.first().focus();
+        await page.keyboard.press('Tab');
+        await expect(rows.nth(1)).toBeFocused();
+        await page.keyboard.press('Enter');
+        await expect(rows.nth(1)).toHaveAttribute('aria-pressed', 'true');
+        expect(await page.locator('[data-selection-band]').getAttribute('x')).not.toBe(firstX);
+        await rows.first().focus();
+        await page.keyboard.press('Space');
+        await expect(rows.first()).toHaveAttribute('aria-pressed', 'true');
+        await expect(page.locator('[data-selection-band]')).toHaveAttribute('x', firstX!);
+      }
+      if (mobile) {
+        await expect(page.locator('.import-controls')).toBeHidden();
+        await expect(page.locator('.totals')).not.toHaveAttribute('open', '');
+        await page.getByRole('button', { name: /記録を変更/ }).click();
+        await expect(page.getByRole('button', { name: '見本1：ふつうの会話', exact: true })).toBeVisible();
+        await page.locator('.totals > summary').click();
+      }
+      await page.getByText('モデル・トークンを見る', { exact: true }).click();
+      await expect(page.getByText('使ったモデル', { exact: true })).toBeVisible();
+      if (scenario === 'long-model') await expect(page.getByText(/claude-sonnet-99-12345678-12345678-latest/)).toBeVisible();
+      await noOverflow();
+      if (scenario === 'broken') {
+        await expect(page.getByRole('status').filter({ hasText: /^読み込みを確認してください$/ })).toBeVisible();
+        await expect(page.locator('.read-counts > div').last().locator('dd')).toHaveText('1');
+      }
+      await expectPrivate(page, [filename, ...sample.trim().split('\n').flatMap(line => markedValues(JSON.parse(line)))]);
+    });
+  }
+}

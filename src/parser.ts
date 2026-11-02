@@ -3,12 +3,18 @@ export const MAX_FILE_BYTES = 50 * 1024 * 1024;
 export const USAGE_KEYS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const;
 export type UsageKey = typeof USAGE_KEYS[number];
 export type Event = { at: number; kind: 'human' | 'row' | 'tool'; tool?: string; error: boolean };
+/** Times are seconds from the session start; null is a missing timestamp. */
+export type Trouble = {
+  number: number; tool: string; matched: boolean; failedAt: number | null; errorAt: number | null;
+  nextSame: { at: number | null } | null;
+  nextCall: { tool: string; at: number | null } | null; retry: boolean;
+};
 export type Summary = {
   rows: number; chartedRows: number; invalidRows: number; otherRows: number; untimedRows: number;
   humanMessages: number; assistantMessages: number; toolCalls: number; toolErrors: number;
   retries: number; sidechainRows: number; start: number | null; end: number | null; durationMs: number;
   models: string[]; tools: { name: string; count: number }[];
-  usage: Record<UsageKey, number>; events: Event[]; success: boolean;
+  usage: Record<UsageKey, number>; events: Event[]; troubles: Trouble[]; success: boolean;
 };
 const toolNames = new Set(['Read', 'Edit', 'Write', 'Bash', 'Glob', 'Grep', 'Task', 'Agent', 'TodoWrite', 'WebFetch', 'WebSearch', 'NotebookEdit', 'AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode', 'Skill', 'ToolSearch', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'TaskOutput', 'TaskStop', 'web_search', 'web_fetch', 'code_execution']);
 const safeTool = (value: unknown) => typeof value === 'string' && toolNames.has(value) ? value : 'その他の道具';
@@ -25,7 +31,7 @@ export function createAccumulator() {
   const result: Summary = {
     rows: 0, chartedRows: 0, invalidRows: 0, otherRows: 0, untimedRows: 0, humanMessages: 0,
     assistantMessages: 0, toolCalls: 0, toolErrors: 0, retries: 0, sidechainRows: 0,
-    start: null, end: null, durationMs: 0, models: [], tools: [], events: [], success: false,
+    start: null, end: null, durationMs: 0, models: [], tools: [], events: [], troubles: [], success: false,
     usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
   };
   const tools = new Map<string, number>();
@@ -33,8 +39,14 @@ export function createAccumulator() {
   // IDs and original tool names stay private to the accumulator and are discarded at finish.
   const assistantIds = new Set<string>();
   const usageIds = new Set<string>();
-  const calls = new Map<string, { name: string | null; event?: Event }>();
-  const pending = new Map<string, boolean>();
+  type Call = { name: string | null; at: number | null; event?: Event; nextSame?: Call };
+  type Failure = { call?: Call; at: number | null; nextCall?: Call; retry: boolean };
+  const calls = new Map<string, Call>();
+  const orderedCalls: Call[] = [];
+  const failures: Failure[] = [];
+  const pending = new Map<string, Failure[]>();
+  let awaitingNext: Failure[] = [];
+  let failedEntry: Failure | null = null;
   let failedTool: string | null = null;
   function line(raw: string) {
     if (!raw.trim()) return;
@@ -80,14 +92,25 @@ export function createAccumulator() {
         const original = typeof block.name === 'string' ? block.name : null;
         result.toolCalls++;
         tools.set(name, (tools.get(name) ?? 0) + 1);
-        if (failedTool !== null && original === failedTool) result.retries++;
+        const call: Call = { name: original, at };
+        orderedCalls.push(call);
+        for (const failure of awaitingNext) failure.nextCall = call;
+        awaitingNext = [];
+        if (failedTool !== null && original === failedTool) {
+          result.retries++;
+          if (failedEntry) failedEntry.retry = true;
+        }
         // The very next call after an error is the retry candidate, even across text/metadata rows.
         failedTool = null;
+        failedEntry = null;
         const event: Event | undefined = at === null ? undefined : { at, kind: 'tool', tool: name, error: false };
+        call.event = event;
         if (event) result.events.push(event);
         if (typeof block.id === 'string') {
-          calls.set(block.id, { name: original, event });
-          if (pending.get(block.id) && event) event.error = true;
+          calls.set(block.id, call);
+          const earlier = pending.get(block.id);
+          if (earlier && event) event.error = true;
+          for (const failure of earlier ?? []) if (!failure.call) failure.call = call;
           pending.delete(block.id);
         }
       }
@@ -95,9 +118,17 @@ export function createAccumulator() {
         result.toolErrors++;
         const id = typeof block.tool_use_id === 'string' ? block.tool_use_id : null;
         const call = id === null ? undefined : calls.get(id);
+        const failure: Failure = { call, at, retry: false };
+        failures.push(failure);
+        awaitingNext.push(failure);
+        failedEntry = failure;
         failedTool = call?.name ?? null;
         if (call?.event) call.event.error = true;
-        else if (id !== null) pending.set(id, true);
+        else if (id !== null) {
+          const entries = pending.get(id) ?? [];
+          entries.push(failure);
+          pending.set(id, entries);
+        }
       }
     }
   }
@@ -107,7 +138,25 @@ export function createAccumulator() {
     result.tools = [...tools].map(([name, count]) => ({ name, count }));
     result.success = result.invalidRows === 0 && result.assistantMessages > 0;
     result.events.sort((a, b) => a.at - b.at);
-    calls.clear(); pending.clear(); assistantIds.clear(); usageIds.clear(); failedTool = null;
+    // Link in original call order, using private names, never the redacted label.
+    const nextByName = new Map<string, Call>();
+    for (let i = orderedCalls.length - 1; i >= 0; i--) {
+      const call = orderedCalls[i];
+      if (call.name !== null) {
+        call.nextSame = nextByName.get(call.name);
+        nextByName.set(call.name, call);
+      }
+    }
+    const seconds = (at: number | null | undefined) => at == null || result.start === null ? null : (at - result.start) / 1000;
+    result.troubles = failures.map((failure, i) => ({
+      number: i + 1, tool: safeTool(failure.call?.name), matched: !!failure.call,
+      failedAt: seconds(failure.call?.at), errorAt: seconds(failure.at),
+      nextSame: failure.call?.nextSame ? { at: seconds(failure.call.nextSame.at) } : null,
+      nextCall: failure.nextCall ? { tool: safeTool(failure.nextCall.name), at: seconds(failure.nextCall.at) } : null,
+      retry: failure.retry,
+    }));
+    calls.clear(); pending.clear(); assistantIds.clear(); usageIds.clear(); nextByName.clear();
+    orderedCalls.length = 0; failures.length = 0; awaitingNext = []; failedTool = null; failedEntry = null;
     return result;
   }
   return { line, finish };
