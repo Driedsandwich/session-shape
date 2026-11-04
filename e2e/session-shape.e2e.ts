@@ -172,32 +172,45 @@ test('ファイル選択で分割応答を重複集計せず、本文もファ�
   await expectPrivate(page, [filename, ...markedValues(uploadRows)]);
 });
 
-test('本物の canvas から PNG を 1 件ダウンロードし、SVG の 2 倍の幅になる', async ({ page }, testInfo) => {
-  await page.getByRole('button', { name: '見本1：ふつうの会話', exact: true }).click();
-  const svg = page.getByRole('img', { name: '人の発言と道具の呼び出しの時間の帯' });
-  await expect(svg).toBeVisible();
-  const dimensions = await svg.evaluate((element: SVGSVGElement) => ({ width: element.width.baseVal.value, height: element.height.baseVal.value }));
-  const downloads: string[] = [];
-  page.on('download', download => downloads.push(download.suggestedFilename()));
-  const downloading = page.waitForEvent('download');
-  await page.getByRole('button', { name: '図を PNG で書き出す' }).click();
-  const download = await downloading;
-  const path = testInfo.outputPath('session-shape.png');
-  await download.saveAs(path);
-  expect(await download.failure()).toBeNull();
-  const png = await readFile(path);
-  expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-  expect(png.toString('ascii', 12, 16)).toBe('IHDR');
-  expect(png.readUInt32BE(16)).toBe(dimensions.width * 2);
-  expect(png.readUInt32BE(20)).toBe(dimensions.height * 2);
-  await expect(page.getByRole('status').filter({ hasText: 'PNG を書き出しました。' })).toBeVisible();
-  await page.waitForLoadState('networkidle');
-  expect(downloads).toEqual(['session-shape.png']);
-  expect((await trackedEvents(page)).filter(event => event.name === 'export_dispatched')).toEqual([
-    { name: 'export_dispatched', properties: { kind: 'demo_normal' } },
-  ]);
-  await testInfo.attach('実ブラウザで書き出した PNG', { path, contentType: 'image/png' });
-});
+for (const [number, viewportWidth] of [[1, 1440], [2, 1440], [2, 390]] as const) {
+  test(`見本 ${number}・${viewportWidth}px の実際の PNG は上下の帯を含む固定寸法になる`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: viewportWidth, height: viewportWidth === 390 ? 844 : 900 });
+    await page.getByRole('button', { name: number === 1 ? '見本1：ふつうの会話' : '見本2：エラーとやり直し', exact: true }).click();
+    if (number === 2) {
+      await page.locator('.row-action button').first().click();
+      await expect(page.locator('.row-action button').first()).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.locator('[data-selection-band]')).toHaveCount(1);
+    }
+    const svg = page.getByRole('img', { name: '人の発言と道具の呼び出しの時間の帯' });
+    await expect(svg).toBeVisible();
+    const before = await svg.evaluate(element => element.outerHTML);
+    const dimensions = await svg.evaluate((element: SVGSVGElement) => ({ width: element.width.baseVal.value, height: element.height.baseVal.value }));
+    expect(dimensions).toEqual(viewportWidth === 390 ? { width: 360, height: 204 } : { width: 760, height: 254 });
+    const downloads: string[] = [];
+    page.on('download', download => downloads.push(download.suggestedFilename()));
+    const downloading = page.waitForEvent('download');
+    await page.getByRole('button', { name: '図を PNG で書き出す' }).click();
+    const download = await downloading;
+    const path = testInfo.outputPath('session-shape.png');
+    await download.saveAs(path);
+    expect(await download.failure()).toBeNull();
+    const png = await readFile(path);
+    expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    expect(png.toString('ascii', 12, 16)).toBe('IHDR');
+    // Five lanes: desktop chart 254 + header 56 + footer 40; compact
+    // chart 204 + header 80 + footer 72. The entire export is rasterized at 2x.
+    expect(png.readUInt32BE(16)).toBe(viewportWidth === 390 ? 720 : 1520);
+    expect(png.readUInt32BE(20)).toBe(viewportWidth === 390 ? 712 : 700);
+    expect(await svg.evaluate(element => element.outerHTML)).toBe(before);
+    await expect(page.getByRole('status').filter({ hasText: 'PNG を書き出しました。' })).toBeVisible();
+    await page.waitForLoadState('networkidle');
+    expect(downloads).toEqual(['session-shape.png']);
+    expect((await trackedEvents(page)).filter(event => event.name === 'export_dispatched')).toEqual([
+      { name: 'export_dispatched', properties: { kind: number === 1 ? 'demo_normal' : 'demo_retry' } },
+    ]);
+    await testInfo.attach('実ブラウザで書き出した PNG', { path, contentType: 'image/png' });
+  });
+}
 
 test('壊れた行の混ざったファイルは確認を促す', async ({ page }, testInfo) => {
   const path = testInfo.outputPath(filename);
