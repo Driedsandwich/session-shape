@@ -198,8 +198,9 @@ for (const [number, viewportWidth] of [[1, 1440], [2, 1440], [2, 390]] as const)
     expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
     expect(png.toString('ascii', 12, 16)).toBe('IHDR');
     // Five lanes: desktop chart 254 + header 56 + footer 40; compact
-    // chart 204 + header 80 + footer 72. The entire export is rasterized at 2x.
-    expect(png.readUInt32BE(16)).toBe(viewportWidth === 390 ? 720 : 1520);
+    // chart 204 + header 80 + footer 72. Add 16px on each side of the chart.
+    // The entire export is rasterized at 2x.
+    expect(png.readUInt32BE(16)).toBe(viewportWidth === 390 ? 784 : 1584);
     expect(png.readUInt32BE(20)).toBe(viewportWidth === 390 ? 712 : 700);
     expect(await svg.evaluate(element => element.outerHTML)).toBe(before);
     await expect(page.getByRole('status').filter({ hasText: 'PNG を書き出しました。' })).toBeVisible();

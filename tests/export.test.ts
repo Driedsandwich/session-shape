@@ -35,7 +35,7 @@ it('SVG を canvas に描き PNG を保存し、blob URL を解放する', async
   vi.useFakeTimers({ toFake: ['setTimeout'] });
   const m = setup();
   await exportPng(m.svg, totals);
-  expect(m.draw).toHaveBeenCalledWith(expect.anything(), 0, 0, 2240, 792);
+  expect(m.draw).toHaveBeenCalledWith(expect.anything(), 0, 0, 2304, 792);
   expect(m.encode).toHaveBeenCalledWith(expect.any(Function), 'image/png');
   expect(m.download).toHaveBeenCalledOnce();
   expect(m.revoke).toHaveBeenCalledWith('blob:svg');
@@ -89,7 +89,7 @@ it.each([false, true])('実際の選択の帯がある場合にだけ凡例を�
     const { svg, summary } = await timeline(compact, selection);
     const before = svg.outerHTML;
     const { source } = serializeExportSvg(svg, summary);
-    expect(source.includes('▮ 選んだつまずき')).toBe(selection === 'first');
+    expect(new DOMParser().parseFromString(source, 'image/svg+xml').documentElement.textContent?.includes('▮ 選んだつまずき')).toBe(selection === 'first');
     expect(source).not.toContain('〔目印');
     expect(source).not.toContain(filename);
     expect(svg.outerHTML).toBe(before);
@@ -102,6 +102,33 @@ it('長い会話と大きな総数は compact の上の帯で改行し、図の�
   const labels = [...result.querySelectorAll('svg > text[text-anchor="end"]')];
   expect(labels.map(node => node.textContent)).toEqual(['100000時間 0分 0秒 · 道具 1234567回 ·', 'エラー 1234567回']);
   expect(labels.map(node => node.getAttribute('y'))).toEqual(['56', '80']);
-  expect(result.querySelector('svg > g')?.getAttribute('transform')).toBe('translate(0 104)');
+  expect(result.querySelector('svg > g')?.getAttribute('transform')).toBe('translate(16 104)');
   expect(exported.height).toBe(Number(svg.getAttribute('height')) + 104 + 72);
+});
+it.each([false, true])('凡例の印は図と同色で、語の色と図の左右の余白を保つ (compact=%s)', async compact => {
+  const { svg, summary } = await timeline(compact, 'first');
+  const exported = serializeExportSvg(svg, summary);
+  const result = new DOMParser().parseFromString(exported.source, 'image/svg+xml');
+  const symbols = [...result.querySelectorAll('svg > text > tspan')];
+  expect(symbols.map(node => node.textContent)).toEqual(['●', '×', '┆', '▮']);
+  expect(symbols.map(node => node.getAttribute('fill'))).toEqual([
+    svg.querySelector('circle')!.getAttribute('fill'),
+    svg.querySelector('path')!.getAttribute('stroke'),
+    svg.querySelector('line[stroke-dasharray]')!.getAttribute('stroke'),
+    svg.querySelector('[data-selection-band]')!.getAttribute('fill'),
+  ]);
+  for (const symbol of symbols) {
+    expect(symbol.parentElement!.getAttribute('fill')).toBe('#172033');
+    expect(symbol.nextSibling?.nodeType).toBe(Node.TEXT_NODE);
+  }
+  expect(symbols[3].getAttribute('stroke')).toBe(svg.querySelector('line[stroke-dasharray]')!.getAttribute('stroke'));
+  expect(symbols[3].getAttribute('stroke-width')).toBe('0.6');
+  const chart = result.querySelector('svg > g')!;
+  expect(chart.getAttribute('transform')).toBe(`translate(16 ${compact ? 80 : 56})`);
+  const serializeChildren = (node: Element) => [...node.childNodes].map(child => new XMLSerializer().serializeToString(child));
+  expect(serializeChildren(chart)).toEqual(serializeChildren(svg));
+  expect(exported.width).toBe(Number(svg.getAttribute('width')) + 32);
+  expect(result.documentElement.getAttribute('width')).toBe(String(exported.width));
+  expect(result.documentElement.getAttribute('viewBox')).toBe(`0 0 ${exported.width} ${exported.height}`);
+  expect(result.querySelector('svg > rect')!.getAttribute('width')).toBe(String(exported.width));
 });

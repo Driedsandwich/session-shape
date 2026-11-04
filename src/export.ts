@@ -1,5 +1,5 @@
 import type { Summary } from './parser';
-import { duration } from './Timeline';
+import { colors, duration, markerColors } from './Timeline';
 
 type ExportTotals = Pick<Summary, 'durationMs' | 'toolCalls' | 'toolErrors'>;
 const namespace = 'http://www.w3.org/2000/svg';
@@ -11,15 +11,16 @@ export function serializeExportSvg(svg: SVGSVGElement, totals: ExportTotals) {
   // Normalize React's xmlns attribute before XML serialization.
   copy.removeAttribute('xmlns');
   copy.setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns', namespace);
-  const width = Number(svg.getAttribute('width'));
+  const chartWidth = Number(svg.getAttribute('width'));
   const chartHeight = Number(svg.getAttribute('height'));
-  const compact = width < 760;
+  const compact = chartWidth < 760;
   const inset = 16;
+  const width = chartWidth + inset * 2;
   const parts = [duration(totals.durationMs), `道具 ${totals.toolCalls}回`, `エラー ${totals.toolErrors}回`];
   // Conservative glyph widths for the local 14px font. Wrap at separators for
   // long sessions/counts as well as compact charts, without shrinking the text.
   const textWidth = (value: string) => [...value].reduce((sum, char) => sum + (char.charCodeAt(0) > 127 ? 14 : 8), 0);
-  const available = width - (compact ? inset * 2 : 200) - 16;
+  const available = chartWidth - (compact ? inset * 2 : 200) - 16;
   const lines: string[] = [];
   for (const part of parts) {
     const last = lines.length - 1;
@@ -33,9 +34,10 @@ export function serializeExportSvg(svg: SVGSVGElement, totals: ExportTotals) {
   const footerHeight = compact ? 72 : 40;
   const height = headerHeight + chartHeight + footerHeight;
   const chart = document.createElementNS(namespace, 'g');
-  chart.setAttribute('transform', `translate(0 ${headerHeight})`);
+  chart.setAttribute('transform', `translate(${inset} ${headerHeight})`);
   chart.append(...copy.childNodes);
   copy.append(chart);
+  copy.setAttribute('width', String(width));
   copy.setAttribute('height', String(height));
   copy.setAttribute('viewBox', `0 0 ${width} ${height}`);
   const background = document.createElementNS(namespace, 'rect');
@@ -52,14 +54,32 @@ export function serializeExportSvg(svg: SVGSVGElement, totals: ExportTotals) {
     node.setAttribute('text-anchor', right ? 'end' : 'start');
     node.setAttribute('fill', '#172033');
     copy.append(node);
+    return node;
   }
   text('Session Shape', inset, 32, true);
   lines.forEach((line, index) => text(line, width - inset, (compact ? 56 : 32) + index * 24, false, true));
-  const legend = '● 道具　× エラー　┆ 人の発言';
   const selected = copy.querySelector('[data-selection-band="true"]') !== null;
   const footerY = headerHeight + chartHeight + 26;
-  text(legend + (selected && !compact ? '　▮ 選んだつまずき' : ''), inset, footerY);
-  if (selected && compact) text('▮ 選んだつまずき', inset, footerY + 24);
+  const legend = text('', inset, footerY);
+  function legendItem(parent: SVGTextElement, mark: string, label: string, fill: string, outlined = false) {
+    const symbol = document.createElementNS(namespace, 'tspan');
+    symbol.textContent = mark;
+    symbol.setAttribute('fill', fill);
+    if (outlined) {
+      symbol.setAttribute('stroke', markerColors.human);
+      symbol.setAttribute('stroke-width', '0.6');
+      symbol.setAttribute('paint-order', 'stroke fill');
+    }
+    parent.append(symbol, document.createTextNode(` ${label}`));
+  }
+  legendItem(legend, '●', '道具　', colors[0]);
+  legendItem(legend, '×', 'エラー　', markerColors.error);
+  legendItem(legend, '┆', '人の発言', markerColors.human);
+  if (selected) {
+    const row = compact ? text('', inset, footerY + 24) : legend;
+    if (!compact) row.append(document.createTextNode('　'));
+    legendItem(row, '▮', '選んだつまずき', markerColors.selection, true);
+  }
   return { source: new XMLSerializer().serializeToString(copy), width, height };
 }
 

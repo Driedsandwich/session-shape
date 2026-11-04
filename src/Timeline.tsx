@@ -1,6 +1,7 @@
 import { forwardRef } from 'react';
 import type { Summary, Trouble } from './parser';
 export const colors = ['#2F4BA8'];
+export const markerColors = { error: '#C8402A', human: '#9aa7c4', selection: '#e9eefc' };
 export function duration(ms: number) {
   const seconds = Math.floor(ms / 1000);
   if (seconds >= 3600) return `${Math.floor(seconds / 3600)}時間 ${Math.floor(seconds / 60) % 60}分 ${seconds % 60}秒`;
@@ -33,15 +34,15 @@ export const Timeline = forwardRef<SVGSVGElement, { summary: Summary; selected?:
   const end = selected?.nextCall?.at ?? start;
   return <svg ref={ref} xmlns="http://www.w3.org/2000/svg" width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="人の発言と道具の呼び出しの時間の帯" style={{ fontFamily: '"Noto Sans CJK JP", system-ui, sans-serif' }}>
     <rect width={width} height={height} fill="#ffffff" />
-    {start != null && end != null && <rect data-selection-band="true" x={Math.min(atX(start), atX(end))} y={top - 20} width={Math.max(4, Math.abs(atX(end) - atX(start)))} height={bottom - top + 16} fill="#e9eefc" />}
+    {start != null && end != null && <rect data-selection-band="true" x={Math.min(atX(start), atX(end))} y={top - 20} width={Math.max(4, Math.abs(atX(end) - atX(start)))} height={bottom - top + 16} fill={markerColors.selection} />}
     {Array.from({ length: 4 }, (_, i) => <g key={i}>
       <line x1={left + span * i / 3} x2={left + span * i / 3} y1={top - 20} y2={bottom - 4} stroke="#dce0e8" />
       <text x={left + span * i / 3} y={compact ? bottom + 18 : 23} textAnchor="middle" fontSize="14" fill="#59647a">{Math.round(s.durationMs / 1000 * i / 3)}{compact ? '' : '秒'}</text>
     </g>)}
-    {[...humans].map(bin => <line key={bin} x1={x(bin)} x2={x(bin)} y1={top - 20} y2={bottom - 4} stroke="#9aa7c4" strokeDasharray="3 3" />)}
+    {[...humans].map(bin => <line key={bin} x1={x(bin)} x2={x(bin)} y1={top - 20} y2={bottom - 4} stroke={markerColors.human} strokeDasharray="3 3" />)}
     {s.tools.map((tool, i) => <g key={tool.name}><text x="0" y={top + 5 + i * laneHeight} fill="#172033" fontSize="14">{tool.name}</text><line x1={left} x2={left + span} y1={top + i * laneHeight} y2={top + i * laneHeight} stroke="#d3d9e3" /></g>)}
     {[...calls].map(([key, call]) => <g key={key}>
-      {call.error ? <path d={`M ${x(call.bin) - 4} ${top - 4 + call.lane * laneHeight} l 8 8 m 0 -8 l -8 8`} stroke="#C8402A" strokeWidth="1.6" /> : <circle cx={x(call.bin)} cy={top + call.lane * laneHeight} r={Math.min(8, (compact ? 3.5 : 5) + Math.log2(call.count))} fill={colors[0]} />}
+      {call.error ? <path d={`M ${x(call.bin) - 4} ${top - 4 + call.lane * laneHeight} l 8 8 m 0 -8 l -8 8`} stroke={markerColors.error} strokeWidth="1.6" /> : <circle cx={x(call.bin)} cy={top + call.lane * laneHeight} r={Math.min(8, (compact ? 3.5 : 5) + Math.log2(call.count))} fill={colors[0]} />}
       <title>{s.tools[call.lane]?.name} · {call.count}回{call.error ? ' · エラー' : ''}</title>
     </g>)}
     {!s.events.length && <text x={width / 2} y={top} textAnchor="middle" fontSize="14" fill="#59647a">時刻のある行がありません</text>}
