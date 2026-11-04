@@ -54,7 +54,7 @@ export function Results({ summary: s, kind, importPanel }: { summary: Summary; k
     return () => { active = false; observer.disconnect(); };
   }, [kind]);
   const stats = [
-    ['セッションの長さ', duration(s.durationMs)], ['人間のメッセージ', `${s.humanMessages}回`],
+    ['会話の長さ', duration(s.durationMs)], ['人の発言', `${s.humanMessages}回`],
     ['AI の応答', `${s.assistantMessages}回`], ['道具の呼び出し', `${s.toolCalls}回`],
     ['道具のエラー', `${s.toolErrors}回`], ['直後のやり直し', `${s.retries}回`],
     ['サブエージェント', `${s.sidechainRows}行`],
@@ -102,7 +102,7 @@ export function Results({ summary: s, kind, importPanel }: { summary: Summary; k
           <h3>トークンの合計</h3><dl className="tokens">{([
             ['入力', s.usage.input_tokens], ['出力', s.usage.output_tokens], ['キャッシュの読み', s.usage.cache_read_input_tokens], ['キャッシュの作成', s.usage.cache_creation_input_tokens],
           ] as const).map(([label, count]) => <div key={label}><dt>{label}</dt><dd>{count.toLocaleString('ja-JP')}</dd></div>)}</dl>
-          <details className="counting"><summary>数え方について</summary><p>空行は除外します。図にした行は時刻がある user / assistant の行です。その他の type は数だけ集計します。会話の長さは全行の有効な時刻の最小と最大の差です。</p><p>エラー結果 1 件を一覧の 1 件とします。ID で呼び出しを特定し、結果の後の最初の道具呼び出しと元の名前を比較します。やり直しは行順で判定し、次の呼び出しまでに複数のエラーがあれば最後のエラーだけが候補です。後から対応が判明しても判定は遡りません。</p><p>AI の応答は assistant の message.id ごとに 1 回、usage は同じ ID の最初の行だけを加算します。ID がない・空・文字列以外なら行ごとに数えます。後続行で usage を補完しません。道具は塊ごとに数えます。</p><p>未確認の道具名・モデル名は「その他」に置き換えます。時刻がない行の数値も集計します。その他の行 {s.otherRows}・時刻がない会話の行 {s.untimedRows}。</p><p>図の点は道具、× はエラー、点線は人間のメッセージです。近い点はまとめ、呼び出しが多いほど大きくします。PNG は全体の時間軸を書き出します。</p></details>
+          <details className="counting"><summary>数え方について</summary><p>空行は除外します。図にした行は時刻がある user / assistant の行です。その他の type は数だけ集計します。会話の長さは全行の有効な時刻の最小と最大の差です。</p><p>エラー結果 1 件を一覧の 1 件とします。ID で呼び出しを特定し、結果の後の最初の道具呼び出しと元の名前を比較します。やり直しは行順で判定し、次の呼び出しまでに複数のエラーがあれば最後のエラーだけが候補です。後から対応が判明しても判定は遡りません。</p><p>AI の応答は assistant の message.id ごとに 1 回、usage は同じ ID の最初の行だけを加算します。ID がない・空・文字列以外なら行ごとに数えます。後続行で usage を補完しません。道具は塊ごとに数えます。</p><p>未確認の道具名・モデル名は「その他」に置き換えます。時刻がない行の数値も集計します。その他の行 {s.otherRows}・時刻がない会話の行 {s.untimedRows}。</p><p>図の点は道具、× はエラー、点線は人の発言です。近い点はまとめ、呼び出しが多いほど大きくします。PNG は全体の時間軸を書き出します。</p></details>
         </details>
       </details>
     </aside>
