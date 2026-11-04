@@ -85,7 +85,7 @@ export function Results({ summary: s, kind, importPanel }: { summary: Summary; k
         <button disabled={exporting} onClick={async () => {
           if (!svg.current) return;
           setExporting(true); setNotice('');
-          try { await exportPng(svg.current); track('export_dispatched', { kind }); setNotice('PNG を書き出しました。'); }
+          try { await exportPng(svg.current, s); track('export_dispatched', { kind }); setNotice('PNG を書き出しました。'); }
           catch { track('export_failed', { reason: 'png_failed' }); setNotice('PNG を書き出せませんでした。もう一度お試しください。'); }
           finally { setExporting(false); }
         }}>{exporting ? 'PNG を作成中…' : '図を PNG で書き出す'}</button>
