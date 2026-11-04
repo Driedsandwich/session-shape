@@ -38,7 +38,7 @@ describe('表示境界のプライバシー', () => {
     vi.stubGlobal('fetch', network); vi.stubGlobal('XMLHttpRequest', network); vi.stubGlobal('WebSocket', network);
     const log = vi.spyOn(console, 'log'), error = vi.spyOn(console, 'error'), warn = vi.spyOn(console, 'warn');
     const host = mount(<App />);
-    const button = [...host.querySelectorAll('button')].find(b => b.textContent === '見本で試す')!;
+    const button = [...host.querySelectorAll('button')].find(b => b.textContent === '見本1：ふつうの会話')!;
     await act(async () => { button.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
     expect(host.textContent).toContain('読み込み成功');
     expect(host.innerHTML).not.toContain('〔目印');
@@ -57,4 +57,34 @@ describe('表示境界のプライバシー', () => {
     expect(host.innerHTML).not.toContain('秘密');
     expect(host.innerHTML).not.toContain('〔目印');
   });
+});
+
+it('見本1では「つまずきは 0 件」と全体図を表示する', async () => {
+  const s = await parseFile(new NodeBlob([demo1]) as unknown as Blob);
+  const host = mount(<Results summary={s} kind="demo_normal" />);
+  expect(host.textContent).toContain('つまずきは 0 件');
+  expect(host.textContent).toContain('会話全体の流れ');
+  expect(host.querySelector('.trouble-row')).toBeNull();
+  expect(host.querySelector('[data-selection-band]')).toBeNull();
+  expect(host.querySelector('svg')).not.toBeNull();
+});
+it('最初の行を選択して開始し、別の行を押すと図の帯が移る', async () => {
+  const s = await parseFile(new NodeBlob([demo2]) as unknown as Blob);
+  const host = mount(<Results summary={s} kind="demo_retry" />);
+  const buttons = host.querySelectorAll<HTMLButtonElement>('.row-action button');
+  expect(buttons[0].getAttribute('aria-pressed')).toBe('true');
+  const first = host.querySelector('[data-selection-band]')!.getAttribute('x');
+  act(() => buttons[1].click());
+  expect(buttons[0].getAttribute('aria-pressed')).toBe('false');
+  expect(buttons[1].getAttribute('aria-pressed')).toBe('true');
+  expect(host.querySelector('[data-selection-band]')!.getAttribute('x')).not.toBe(first);
+  expect(host.querySelector('.trouble-list')!.outerHTML).not.toContain('〔目印');
+});
+it('時刻なしと対応不明を表示し、位置を推測して強調しない', async () => {
+  const s = await parseFile(new NodeBlob([JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', is_error: true, tool_use_id: '〔目印ID〕' }] } })]) as unknown as Blob);
+  const host = mount(<Results summary={s} kind="user_file" />);
+  expect(host.querySelector('.trouble-list')!.textContent).toContain('時刻なし');
+  expect(host.querySelector('.trouble-list')!.textContent).toContain('対応不明');
+  expect(host.querySelector('[data-selection-band]')).toBeNull();
+  expect(host.innerHTML).not.toContain('〔目印');
 });
