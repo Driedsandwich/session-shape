@@ -4,9 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="referrer" content="no-referrer" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-s4IOMExjQlTDuS8fQ+OpazXycLBFAtZARDOp2ilBAe4=' https://cdn.pendo.io https://app.pendo.io https://data.pendo.io https://pendo-io-static.storage.googleapis.com; style-src 'self' 'unsafe-inline' https://cdn.pendo.io https://app.pendo.io; img-src 'self' blob: data: https://cdn.pendo.io https://app.pendo.io https://data.pendo.io; font-src 'self'; connect-src https://app.pendo.io https://data.pendo.io; frame-src https://app.pendo.io; object-src 'none'; base-uri 'none'; form-action 'none'" />
     <meta name="description" content="AI コーディングの記録を、ブラウザの中で数と図に。ファイルの送信はありません。" />
     <title>Session Shape — AI コーディングの記録を形で見る</title>
+    <script>
+(function(apiKey){
+    (function(p,e,n,d,o){var v,w,x,y,z;o=p[d]=p[d]||{};o._q=o._q||[];
+    v=['initialize','identify','updateOptions','pageLoad','track', 'trackAgent'];for(w=0,x=v.length;w<x;++w)(function(m){
+    o[m]=o[m]||function(){o._q[m===v[0]?'unshift':'push']([m].concat([].slice.call(arguments,0)));};})(v[w]);
+    y=e.createElement(n);y.async=!0;y.src='https://cdn.pendo.io/agent/static/'+apiKey+'/pendo.js';
+    z=e.getElementsByTagName(n)[0];z.parentNode.insertBefore(y,z);})(window,document,'script','pendo');
+})('b903458e-c62a-427f-914a-200f8171447f');
+</script>
   </head>
   <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>
 </html>
