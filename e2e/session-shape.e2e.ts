@@ -1,29 +1,64 @@
 import { test as base, expect, type Page } from '@playwright/test';
 import { readFile, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { agentUrl, attributeInventory, collectedEvents, decodeRequest, fakeAgent, pendoOrigins, productionCsp, staticRequest, type PendoAudit, type TestPendo } from './pendo-audit';
 
 type TrackedEvent = { name: string; properties: Record<string, unknown> };
 type AuditedWindow = Window & { sessionShapeTestEvents: TrackedEvent[] };
 const trackedEvents = (page: Page) => page.evaluate(() => (window as unknown as AuditedWindow).sessionShapeTestEvents);
 
-// Observe from before navigation through the end of every scenario. Do not mock
-// network, image loading, canvas, Blob URLs, or the download implementation.
-const test = base.extend<{ browserAudit: void }>({
-  browserAudit: [async ({ context, page, baseURL }, use) => {
+// Observe the full scenario. Only Pendo is intercepted; local assets, canvas,
+// Blob URLs, and the download implementation still run in the real browser.
+const test = base.extend<{ browserAudit: void; realPendo: boolean; pendoAudit: PendoAudit }>({
+  realPendo: [false, { option: true }],
+  pendoAudit: async ({}, use) => { await use({ requests: [] }); },
+  browserAudit: [async ({ context, page, baseURL, realPendo, pendoAudit }, use) => {
     const unexpectedRequests: string[] = [];
     const consoleErrors: string[] = [];
     const pageErrors: string[] = [];
-    const origin = new URL(baseURL!).origin;
     context.on('request', request => {
-      const url = new URL(request.url());
-      // Exporting an image reads a local Blob, with no network request.
-      if (url.protocol === 'blob:' && url.origin === origin && request.resourceType() === 'image') return;
-      const document = request.resourceType() === 'document' && url.href === baseURL;
-      const asset = ['script', 'stylesheet', 'image', 'font'].includes(request.resourceType())
-        && url.pathname.startsWith('/session-shape/assets/');
-      if (url.origin !== origin || request.method() !== 'GET' || !(document || asset)) {
-        unexpectedRequests.push(`${request.method()} ${request.resourceType()} ${url.href}`);
+      if (!staticRequest(request, baseURL!) && !pendoOrigins.has(new URL(request.url()).origin)) {
+        unexpectedRequests.push(`${request.method()} ${request.resourceType()} ${request.url()}`);
       }
+    });
+    // Context fallback also prevents requests from a popup from escaping.
+    await context.route('**/*', route => {
+      if (staticRequest(route.request(), baseURL!)) return route.continue();
+      return route.abort('blockedbyclient');
+    });
+    await page.route('**/*', async route => {
+      const request = route.request();
+      const url = new URL(request.url());
+      if (staticRequest(request, baseURL!)) return route.continue();
+      if (!pendoOrigins.has(url.origin)) return route.abort('blockedbyclient');
+      if (['https://data.pendo.io', 'https://app.pendo.io'].includes(url.origin)) {
+        pendoAudit.requests.push({ url: request.url(), method: request.method(), body: request.postDataBuffer(), contentType: request.headers()['content-type'] ?? '' });
+        // Never route.fetch/continue these requests, including GETs and beacons.
+        await route.fulfill({ status: 200, body: '', headers: { 'access-control-allow-origin': '*' } });
+      } else if (request.url() === agentUrl && request.method() === 'GET') {
+        if (!realPendo) return route.fulfill({ contentType: 'application/javascript', body: fakeAgent });
+        try {
+          if (process.env.PENDO_TEST_CDN_OFFLINE === '1') throw new Error('Simulated CDN outage');
+          // Do not follow redirects to a collection endpoint.
+          const response = await route.fetch({ timeout: 15_000, maxRedirects: 0 });
+          if (!response.ok()) throw new Error(`HTTP ${response.status()}`);
+          const body = await response.body();
+          pendoAudit.scriptSha256 = createHash('sha256').update(body).digest('hex');
+          await route.fulfill({ response, body });
+        } catch {
+          pendoAudit.cdnUnavailable = 'CDN に届かない: cdn.pendo.io の SDK を取得できませんでした'
+            + (process.env.PENDO_TEST_CDN_OFFLINE === '1' ? '（到達不能を模擬）' : '');
+          await route.fulfill({ contentType: 'application/javascript', body: fakeAgent });
+        }
+      } else {
+        // CSP-listed guide assets are allowed by the audit but not needed here.
+        await route.fulfill({ status: 200, body: '' });
+      }
+    });
+    await page.routeWebSocket('**/*', socket => {
+      unexpectedRequests.push(`WebSocket ${socket.url()}`);
+      socket.close();
     });
     context.on('console', message => {
       if (message.type() === 'error') consoleErrors.push(message.text());
@@ -37,7 +72,7 @@ const test = base.extend<{ browserAudit: void }>({
     });
     await use();
     await page.waitForLoadState('networkidle');
-    expect(unexpectedRequests, '同一 origin の静的資産以外への要求').toEqual([]);
+    expect(unexpectedRequests, '同一 origin の静的資産と CSP の Pendo ホスト以外への要求').toEqual([]);
     expect(consoleErrors, 'console.error / CSP 違反').toEqual([]);
     expect(pageErrors, 'ブラウザ内の未処理例外').toEqual([]);
     const events = await trackedEvents(page);
@@ -62,6 +97,8 @@ const test = base.extend<{ browserAudit: void }>({
   }, { auto: true }],
 });
 
+test.use({ serviceWorkers: 'block' });
+
 test.beforeEach(async ({ page }) => {
   const response = await page.goto('./');
   expect(response?.status()).toBe(200);
@@ -70,7 +107,7 @@ test.beforeEach(async ({ page }) => {
   const csp = await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute('content');
   expect(csp).toContain("default-src 'none'");
   expect(csp).toContain("script-src 'self'");
-  expect(csp).toContain("connect-src 'none'");
+  expect(csp).toBe(productionCsp);
   await expect(page.locator('script[src*="/@vite/client"]')).toHaveCount(0);
 });
 
@@ -109,7 +146,7 @@ function markedValues(value: unknown): string[] {
   return [];
 }
 
-test('初期表示は外部通信も console error もない', async ({ page }) => {
+test('初期表示は許可以外の通信も console error もない', async ({ page }) => {
   await expect(page.getByText('読み込むと、ここに作業の形が現れます。')).toBeVisible();
 });
 
@@ -295,3 +332,97 @@ for (const width of [1440, 390]) {
     });
   }
 }
+
+async function exercisePrivacy(page: Page) {
+  const inventories = [];
+  const forbidden = new Set([filename, '〔目印', '秘密', 'Edit', 'Bash', 'Read', 'Grep', 'web_search', 'その他の道具', 'その他のモデル', 'claude-opus-5-5', 'claude-haiku-5-5', 'claude-sonnet-99-12345678-12345678-latest']);
+  const sample = readFileSync(new URL('../src/samples/demo-2.jsonl', import.meta.url), 'utf8');
+  const entries = sample.trim().split('\n').map(line => JSON.parse(line));
+  entries.flatMap(markedValues).forEach(value => forbidden.add(value));
+  for (const entry of [...entries, ...uploadRows]) {
+    if (typeof entry.timestamp === 'string') forbidden.add(entry.timestamp);
+  }
+  markedValues(uploadRows).forEach(value => forbidden.add(value));
+  for (const kind of ['demo_retry', 'user_file']) {
+    const compact = kind === 'user_file';
+    await page.setViewportSize({ width: compact ? 390 : 1440, height: 900 });
+    if (kind === 'demo_retry') await page.getByRole('button', { name: '見本2：エラーとやり直し', exact: true }).click();
+    else await page.getByLabel('会話の JSONL ファイル').setInputFiles({ name: filename, mimeType: 'application/x-ndjson', buffer: Buffer.from(`${sample.replaceAll('claude-opus-5-5', 'claude-sonnet-99-12345678-12345678-latest')}\n${uploadText}`) });
+    await expect(page.locator('.trouble-row')).toHaveCount(2);
+    for (const button of await page.locator('.row-action button').all()) {
+      await button.focus();
+      await button.click();
+    }
+    // Actual text-bearing targets, including non-button elements Pendo captures.
+    await page.locator('.chart svg').click({ position: { x: 50, y: 50 } });
+    if (compact) await page.locator('.totals > summary').click();
+    await page.locator('.model-details > summary').click();
+    await page.locator('.stats > div').filter({ hasText: '道具の呼び出し' }).click();
+    await page.getByText('使ったモデル', { exact: true }).click();
+    await page.locator('.model-details > p').first().click();
+    const texts = await page.locator('.stats, .stats > div, .stats dd, .lead, .selection, .failure-time, .model-details, .chart title').allTextContents();
+    for (const text of texts) if (text.trim()) forbidden.add(text.trim());
+    inventories.push({ kind, nodes: await attributeInventory(page) });
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: '図を PNG で書き出す' }).click();
+    expect(await (await download).failure()).toBeNull();
+    await expect.poll(async () => (await trackedEvents(page)).some(event => event.name === 'export_dispatched' && event.properties.kind === kind)).toBe(true);
+  }
+  return { inventories, forbidden: [...forbidden] };
+}
+
+test('偽の Pendo に渡す引数と初期設定は CDN なしでも契約どおり', async ({ page }, testInfo) => {
+  const { inventories, forbidden } = await exercisePrivacy(page);
+  const agent = await page.evaluate(() => {
+    const pendo = (window as unknown as { pendo: TestPendo }).pendo;
+    return { calls: pendo.calls, options: pendo.options };
+  });
+  expect(agent.options).toEqual([{ visitor: { id: '' }, excludeAllText: true, allowedText: [], recording: { enabled: false } }]);
+  expect(agent.calls).toEqual(await trackedEvents(page));
+  expect(agent.calls.map(event => event.name)).toEqual([
+    'sample_start', 'parse_complete', 'shape_presented', 'export_dispatched',
+    'file_received', 'parse_complete', 'shape_presented', 'export_dispatched',
+  ]);
+  for (const secret of forbidden) expect(JSON.stringify(agent.calls)).not.toContain(secret);
+  await testInfo.attach('attribute-inventory.json', { body: JSON.stringify(inventories, null, 2), contentType: 'application/json' });
+  await testInfo.attach('pendo-arguments.json', { body: JSON.stringify(agent, null, 2), contentType: 'application/json' });
+});
+
+test.describe('本物の SDK の送信内容', () => {
+  test.use({ realPendo: true });
+  test('見本2と目印の記録の本文・属性・小計を送らない', async ({ page, pendoAudit }, testInfo) => {
+    test.setTimeout(60_000);
+    // Navigation waits for the intercepted script; only CDN failures skip this test.
+    test.skip(!!pendoAudit.cdnUnavailable, pendoAudit.cdnUnavailable);
+    await expect.poll(() => page.evaluate(() => ((window as unknown as { pendo: TestPendo }).pendo).isReady?.()), { timeout: 15_000 }).toBe(true);
+    const { inventories, forbidden } = await exercisePrivacy(page);
+    await page.evaluate(() => ((window as unknown as { pendo: TestPendo }).pendo).flushNow?.({ unload: true }));
+    // Guide configuration is intentionally an empty response. The SDK can hold
+    // automatic events briefly; require actual click/focus and all custom events,
+    // not merely the initial metadata request, before inspecting the payloads.
+    await expect.poll(async () => {
+      await page.evaluate(() => ((window as unknown as { pendo: TestPendo }).pendo).flushNow?.({ hidden: true }));
+      const events = collectedEvents(pendoAudit.requests.map(decodeRequest));
+      return ['click', 'focus', 'track'].map(type => events.filter(event => event.type === type).length > 0);
+    }, { timeout: 20_000 }).toEqual([true, true, true]);
+    await page.waitForLoadState('networkidle');
+    const decoded = pendoAudit.requests.map(decodeRequest);
+    await testInfo.attach('captured-pendo.json', { body: JSON.stringify(pendoAudit.requests.map(request => ({ ...request, body: request.body?.toString('base64') ?? null, bodyEncoding: 'base64' })), null, 2), contentType: 'application/json' });
+    await testInfo.attach('decoded-pendo.json', { body: JSON.stringify({ scriptSha256: pendoAudit.scriptSha256, version: await page.evaluate(() => ((window as unknown as { pendo: TestPendo }).pendo).VERSION), decoded }, null, 2), contentType: 'application/json' });
+    await testInfo.attach('attribute-inventory.json', { body: JSON.stringify(inventories, null, 2), contentType: 'application/json' });
+    const events = collectedEvents(decoded);
+    const automatic = ['identify', 'meta', 'load', 'click', 'focus', 'submit', 'change'];
+    const application = ['sample_start', 'file_received', 'input_rejected', 'parse_complete', 'shape_presented', 'export_dispatched', 'export_failed'];
+    for (const event of events) {
+      if (event.type === 'track') expect(application).toContain(event.track_event_name);
+      else expect(automatic).toContain(event.type);
+    }
+    const custom = [...new Map(events.filter(event => event.type === 'track').map(event => [event.sequence, event])).values()]
+      .sort((a, b) => a.sequence - b.sequence).map(event => ({ name: event.track_event_name, properties: event.props }));
+    expect(custom).toEqual(await trackedEvents(page));
+    await testInfo.attach('pendo-event-names.json', { body: JSON.stringify({ automatic: [...new Set(events.filter(event => event.type !== 'track').map(event => event.type))], application: [...new Set(custom.map(event => event.name))] }, null, 2), contentType: 'application/json' });
+    const serialized = JSON.stringify(decoded);
+    for (const secret of forbidden) expect(serialized, secret).not.toContain(secret);
+    await testInfo.attach('privacy-check.json', { body: JSON.stringify({ checkedStrings: forbidden, matches: forbidden.filter(secret => serialized.includes(secret)), requestCount: decoded.length, eventCount: events.length }, null, 2), contentType: 'application/json' });
+  });
+});
