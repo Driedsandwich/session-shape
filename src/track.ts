@@ -10,7 +10,18 @@ export type TrackEvents = {
   export_failed: { reason: 'png_failed' };
 };
 
+type PendoAgent = { track(name: string, properties: Record<string, string | boolean>): void };
+declare global { interface Window { pendo?: PendoAgent } }
+
+// Events forwarded to Pendo Track Events, under the exact names registered in Pendo.
+const PENDO_EVENTS: ReadonlySet<keyof TrackEvents> = new Set<keyof TrackEvents>([
+  'file_received', 'input_rejected', 'parse_complete', 'shape_presented', 'export_dispatched', 'export_failed',
+]);
+
 // Local integration point only. Never pass files, summaries, or exceptions here.
 export function track<N extends keyof TrackEvents>(name: N, properties: TrackEvents[N]): void {
   window.dispatchEvent(new CustomEvent('session-shape:track', { detail: { name, properties } }));
+  // Forward the same fixed labels to Pendo when the agent is loaded; tracking must never break the app.
+  if (!PENDO_EVENTS.has(name)) return;
+  try { window.pendo?.track(name, { ...properties }); } catch { /* ignore tracking failures */ }
 }
