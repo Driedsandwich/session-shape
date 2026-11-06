@@ -12,14 +12,20 @@ Claude Code の記録は、利用者の機械の中の Claude Code の設定の�
 
 ## ファイルを送らない設計
 
-処理はすべてブラウザ内で実行します。アプリのコードは fetch・XHR・WebSocket・外部 CDN・解析サービスを使いません。同梱の見本は `?raw` でビルド時に取り込みます。通常のページと静的資産の読み込みはありますが、選択したファイルを送信する経路はありません。Vite の fetch を使う module-preload polyfill も無効です。
+記録の読み込み・集計・PNG の作成は、すべてブラウザ内で実行します。記録の本文・ファイル名・中身の数（小計・道具やモデルの名前）は、どこにも送りません。同梱の見本は `?raw` でビルド時に取り込みます。Vite の module-preload polyfill は無効です。
+
+頁の使われ方（どのボタンを押したか・図まで行ったか）は、作品を良くするために Pendo の Novus で計測します。アプリから送る事象と属性は [HYPOTHESIS.md の7事象の表](HYPOTHESIS.md#計測の口と事象)のとおりです。送信直前に名前・属性・札の値を検査し、表にない値を含む事象は送りません。Pendo の自動計測はページの読み込み、クリック、focus なども記録します。
+
+クリック・focus した要素の文字は送らない設定（`excludeAllText: true`、`allowedText: []`）にし、画面の録画は `recording: { enabled: false }` で切っています。`excludeAllText` は属性の値を止めないため、本物の SDK の送信を遮断・復号する試験で、DOM の属性も点検します。[文字の設定](https://web-sdk.pendo.io/config/analytics/)・[録画の設定](https://web-sdk.pendo.io/config/replay/)・[属性収集の説明](https://support.pendo.io/hc/en-us/articles/360031861612-HTML-attributes-in-data-collection)。
+
+来訪者の識別には Pendo の匿名訪問者 ID を使います。空の訪問者 ID で初期化し、ブラウザに保存済みの匿名 ID があれば再利用します。標準では localStorage を使い、利用できない場合などにはファーストパーティ Cookie を使います。公式文書では匿名のブラウザデータは標準で100日間の非活動が期限、訪問者 Cookie の期限は100日です。ブラウザの保存情報を消すと同じ訪問者として識別できないことがあります。この期間は Pendo サーバー上の計測データの保存期間を意味しません。[匿名訪問者](https://support.pendo.io/hc/en-us/articles/360032202751-Anonymous-visitors)・[Cookie と localStorage](https://support.pendo.io/hc/en-us/articles/360041032971-Cookies-and-local-storage)。
 
 - JSON の各行を数値・時刻・道具名・モデル名だけの `Summary` に変換します。本文、thinking、入出力、ファイル名、cwd、git の枝、題、sessionId や uuid は表示データに含めません。
 - 本文・生の例外を console に出しません。ファイル選択の入力値はイベント内で即座に空にします。ファイルを React の state に保存しません。
 - 道具名はコード内の既知名一覧、モデル名は Claude の製品名と数値バージョンの形式だけを許可し、それ以外は「その他の道具」「その他のモデル」に置換します。MCP の独自名なども伏せます。これは名前への本文混入を防ぐための保守的な仕様です。
 - `message.id`・`tool_use_id` と元の道具名は集計処理の内部だけで照合に使い、集計完了時に破棄します。
 - localStorage / IndexedDB / Cookie / Service Worker に記録を保存しません。次のファイルの読み込み時・ページを閉じる時に集計結果を手放します。
-- 本番の CSP は `connect-src 'none'`。PNG は安全な SVG のみを blob URL から canvas に描画し、`toBlob` で出力します。
+- 本番の CSP で許す外部ホストは `cdn.pendo.io`・`app.pendo.io`・`data.pendo.io`・`pendo-io-static.storage.googleapis.com`（Pendo のガイド用 script）だけです。`connect-src` は `https://app.pendo.io https://data.pendo.io` に限ります。PNG は安全な SVG のみを blob URL から canvas に描画し、`toBlob` で出力します。
 
 DOM にあるのは固定の説明文と、安全な集計値だけです。データの本文・ファイル名をツールチップ、aria-label、data 属性、SVG にも入れません。
 
@@ -54,7 +60,7 @@ npm run preview
 
 `http://localhost:4173/session-shape/` で本番 build を確認できます。編集用には `npm run dev`（`http://localhost:5173/session-shape/`）。通信を制限する設計に合わせて HMR を無効にしているため、変更後は再読み込みしてください。Vite 開発用クライアントの通信と本番コードは別物です。
 
-実行時依存は React / React DOM のみ。図は手組みの SVG。Vitest と jsdom により集計、サイズ境界、チャンク境界、DOM の文字・属性への本文漏出、選択欄のクリアを検証します。Vitest の PNG 試験は画像・canvas API を模擬します。
+Web の npm 実行時依存は React / React DOM です。Pendo SDK は CDN から読み込みます。図は手組みの SVG。Vitest と jsdom により集計、サイズ境界、チャンク境界、DOM の文字・属性への本文漏出、選択欄のクリアを検証します。Vitest の PNG 試験は画像・canvas API を模擬します。
 
 初回は `npx playwright install --with-deps chromium` で試験用の Chromium を入れます。
 `npm run test:e2e` は本番 build と `vite preview` を自動起動し、CSP が有効な headless Chromium で通信・集計・本文とファイル名の非表示・実際の PNG ダウンロードを検証します。
@@ -62,7 +68,7 @@ npm run preview
 
 ## GitHub Pages への公開
 
-この成果物には公開先・個人のトークン・Novus のコードは含めていません。workflow は作成済みで未実行です。
+Pendo の公開アプリキーと読み込みコードを含みます。個人の認証トークンは含めません。
 
 1. GitHub に公開リポジトリ `session-shape` を作り、このフォルダの内容を `main` に push します。`node_modules` と `dist` は除外されます。
 2. Settings → Pages → Build and deployment → Source を **GitHub Actions** にします。
@@ -78,6 +84,10 @@ MCP は `node lib/agents/cli.js mcp` で stdio サーバーを起動し、`analy
 この入口は Node 内で同じ parser を使い、解析時に外へ通信しません。MCP 用の依存は Web の bundle に入りません。
 登録方法・JSON の欄・エラー・GitHub 経由の起動については [エージェント向けの説明](docs/AGENTS.md) を参照してください。
 
-## 後で Novus をつなぐとき
+## Novus の接続と確認
 
-現状は計測コードなし。`data-feature="import-session"` / `view-shape` / `export-png` と日本語のボタン・見出しで 3 歩を区別できます。Novus の接続仕様・送信先・計測イベントは未決定です。接続時は公式の手順を確認して必要な CSP 許可を限定的に追加し、本文や File オブジェクトをイベントに渡さないこと、DOM 漏出試験が引き続き通ることを確認してください。
+PR #5 の読み込みコードの上に、文字収集と録画の停止、7事象の送信口を追加しています。`data-feature="import-session"` / `view-shape` / `export-png` で入口・図・書き出しを区別できます。送信前の検査は `src/track.ts` にまとめ、既存の `session-shape:track` CustomEvent も残しています。
+
+`npm run test:e2e` は `app.pendo.io`・`data.pendo.io` への要求をローカルで捕まえて空の200を返し、本物の Pendo に試験データを送りません。既存の操作試験と引数の確認は偽の SDK で必ず実行し、別の試験で CDN の本物の SDK が作る要求を復号して検査します。CDN に届かない場合だけ、その実 SDK の試験を理由つきで skip します。
+
+`allowedText: []` は管理画面の許可リストを上書きしません。属性収集の追加、文字の許可、SDK 更新時は同じ試験を実行してください。属性の除外用 `htmlAttributeBlacklist` は公式には Pendo Support への依頼事項であり、未確認の初期化設定としては追加していません。現在の設定と検証範囲は [プライバシー説明](docs/PRIVACY_DRAFT.md) に記載しています。[PR #5](https://github.com/Driedsandwich/session-shape/pull/5)。
