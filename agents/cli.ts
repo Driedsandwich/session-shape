@@ -5,7 +5,14 @@ try {
   const [command, path, ...options] = process.argv.slice(2);
   if (command === 'mcp' && path === undefined) {
     const { startServer } = await import('./mcp.js');
-    await startServer();
+    const { flush } = await import('pendo-server-sdk');
+    // Send buffered Pendo events before the process stops.
+    const stop = () => { flush().finally(() => process.exit(0)); };
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
+    const server = await startServer();
+    server.onclose = () => { void flush(); };
+    process.stdin.once('end', () => { void server.close(); });
   } else {
     if (command !== 'analyze' || !path || path.startsWith('-') || path.includes('\0') ||
         options.length > 1 || (options.length === 1 && options[0] !== '--pretty')) {
