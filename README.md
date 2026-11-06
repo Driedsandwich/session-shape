@@ -71,6 +71,13 @@ npm run preview
 
 設定は [Vite の GitHub Pages ガイド](https://vite.dev/guide/static-deploy.html#github-pages) と [GitHub のカスタム workflow ガイド](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages) を参照しています。
 
+## AI のエージェントから使う
+
+`npm ci` 後、CLI は `node lib/agents/cli.js analyze <ファイル.jsonl> --pretty` で集計 JSON を返します。
+MCP は `node lib/agents/cli.js mcp` で stdio サーバーを起動し、`analyze_session` にファイルの絶対パスを渡します。
+この入口は Node 内で同じ parser を使い、解析時に外へ通信しません。MCP 用の依存は Web の bundle に入りません。
+登録方法・JSON の欄・エラー・GitHub 経由の起動については [エージェント向けの説明](docs/AGENTS.md) を参照してください。
+
 ## 後で Novus をつなぐとき
 
 現状は計測コードなし。`data-feature="import-session"` / `view-shape` / `export-png` と日本語のボタン・見出しで 3 歩を区別できます。Novus の接続仕様・送信先・計測イベントは未決定です。接続時は公式の手順を確認して必要な CSP 許可を限定的に追加し、本文や File オブジェクトをイベントに渡さないこと、DOM 漏出試験が引き続き通ることを確認してください。
